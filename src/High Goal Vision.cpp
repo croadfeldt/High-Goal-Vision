@@ -10,6 +10,18 @@
 #include "High Goal Vision.h"
 #include "NetworkTablesClient.h"
 
+typedef struct HSVFilter {
+	std::string name;
+	std::vector<int> hsv_range;
+	// hsv_range is as follows.
+	// h min
+	// h max
+	// s min
+	// s max
+	// v min
+	// v max
+};
+
 //initial min and max HSV filter values.
 int H_MIN = 0;
 int H_MAX = 0;
@@ -17,17 +29,18 @@ int S_MIN = 0;
 int S_MAX = 0;
 int V_MIN = 0;
 int V_MAX = 0;
+std::vector<HSVFilter> hsv_filters;
 
 //Globals for image width and height of display windows.
-int imageWidth = 720;
-int imageHeight = 404;
+int image_width = 720;
+int image_height = 404;
 
 //max number of objects to be detected in frame
 const int MAX_NUM_OBJECTS = 50;
 
 //minimum and maximum object area
 const int MIN_OBJECT_AREA = 5 * 5;
-const int MAX_OBJECT_AREA = imageWidth*imageHeight / 1.5;
+const int MAX_OBJECT_AREA = image_width*image_height / 1.5;
 
 //names that will appear at the top of each window
 const std::string windowName = "Original Image";
@@ -41,10 +54,15 @@ bool calibrationMode = true;//used for showing debugging windows, trackbars etc.
 bool mouseIsDragging;//used for showing a rectangle on screen as user clicks and drags mouse
 bool mouseMove;
 bool rectangleSelected;
+bool zed_cam = true;
+bool display_depth = false;
+bool display_image = false;
+
 cv::Point initialClickPoint, currentMousePoint; //keep track of initial point clicked and current position of mouse
 cv::Rect rectangleROI; //this is the ROI that the user has selected
 std::vector<int> H_ROI, S_ROI, V_ROI;// HSV values from the click/drag ROI region stored in separate vectors so that we can sort them easily
 
+// Create the NetworkTables object
 NetworkTablesClient ntc;
 
 typedef struct mouseOCVStruct {
@@ -60,8 +78,31 @@ int main(int argc, char **argv) {
 	bool trackObjects = true;
 	bool useMorphOps = true;
 
+	// Spin up a YAML object, if the config file exists.
+	if (boost::filesystem::exists(config_file_name)) {
+		YAML::Node config = YAML::LoadFile(config_file_name);
+		std::cout << YAML::Dump(config) << std::endl;
+
+		// Parse the config file, for now just read in the HSV ranges.
+		const YAML::Node hsv_ranges = config["hsv_ranges"];
+		std::cout << YAML::Dump(hsv_ranges) << std::endl;
+		for (YAML::const_iterator it = hsv_ranges.begin(); it != hsv_ranges.end(); ++it) {
+			std::cout << YAML::Dump(*it) << std::endl;
+			HSVFilter hsv_filter;
+			hsv_filter.name = (*it)["name"].as<std::string>();
+			hsv_filter.hsv_range = (*it)["hsv_range"].as<std::vector<int>>();
+			hsv_filters.push_back(hsv_filter);
+		}
+	}
+	else {
+		std::cout << "No config file found." << std::endl;
+	}
+
 	// Create a ZED camera object
 	sl::Camera zed;
+
+	// Create an OpenCV object in case a ZED is not found.
+	cv::VideoCapture capture;
 
 	//matrix storage for HSV image
 	cv::Mat HSV;
@@ -78,12 +119,15 @@ int main(int argc, char **argv) {
 	init_params.depth_mode = sl::DEPTH_MODE_PERFORMANCE;
 	init_params.coordinate_units = sl::UNIT_METER;
 
-	// Open the camera
+	// Open the ZED camera, if not, then open the first available camera via OpenCV.
 	sl::ERROR_CODE err = zed.open(init_params);
-	if (err != sl::SUCCESS)
-		return 1;
+	if (err != sl::SUCCESS) {
+		std::cout << "No ZED Camera was available." << std::endl;
+		zed_cam = false;
+		display_depth = false;
+	}
 
-	// Set runtime parameters after opening the camera
+	// Set runtime parameters after opening the ZED camera
 	sl::RuntimeParameters runtime_parameters;
 	runtime_parameters.sensing_mode = sl::SENSING_MODE_STANDARD; // Use STANDARD sensing mode
 
@@ -97,7 +141,7 @@ int main(int argc, char **argv) {
 	cv::Mat depth_image_ocv(depth_image_zed.getHeight(), depth_image_zed.getWidth(), CV_8UC4, depth_image_zed.getPtr<sl::uchar1>(sl::MEM_CPU));
 
 	// Create OpenCV images to display (lower resolution to fit the screen)
-	cv::Size displaySize(imageWidth, imageHeight);
+	cv::Size displaySize(image_width, image_height);
 	cv::Mat image_ocv_display(displaySize, CV_8UC4);
 	cv::Mat depth_image_ocv_display(displaySize, CV_8UC4);
 
@@ -106,24 +150,32 @@ int main(int argc, char **argv) {
 	mouseStruct._resize = displaySize;
 
 	// Give a name to OpenCV Windows
-	cv::namedWindow("Depth", cv::WINDOW_AUTOSIZE);
-	//cv::setMouseCallback("Depth", onMouseCallback, (void*) &mouseStruct);
+	if (display_depth) {
+		cv::namedWindow("Depth", cv::WINDOW_AUTOSIZE);
+		cv::setMouseCallback("Depth", onMouseCallback, (void*) &mouseStruct);
+	}
 
-	// must create a window before setting mouse callback
-	cv::namedWindow("Image");
+	if (display_image) {
+		// must create a window before setting mouse callback
+		cv::namedWindow("Image");
 
-	// set mouse callback function to be active on "Webcam Feed" window
-	// we pass the handle to our "frame" matrix so that we can draw a rectangle to it
-	// as the user clicks and drags the mouse
-	cv::setMouseCallback("Image", clickAndDrag_Rectangle, (void*) &mouseStruct);
+		// set mouse callback function to be active on "Webcam Feed" window
+		// we pass the handle to our "frame" matrix so that we can draw a rectangle to it
+		// as the user clicks and drags the mouse
+		cv::setMouseCallback("Image", clickAndDrag_Rectangle, (void*) &mouseStruct);
+	}
 
-	// initiate mouse move and drag to false
-	mouseIsDragging = false;
-	mouseMove = false;
-	rectangleSelected = false;
+	if (display_depth || display_image) {
+		// initiate mouse move and drag to false
+		mouseIsDragging = false;
+		mouseMove = false;
+		rectangleSelected = false;
+	}
 
 	// Jetson only. Execute the calling thread on 2nd core
-	sl::Camera::sticktoCPUCore(2);
+	if (zed_cam) {
+		sl::Camera::sticktoCPUCore(2);
+	}
 
 	// Loop until 'q' is pressed
 	char key = ' ';
@@ -142,28 +194,32 @@ int main(int argc, char **argv) {
 			//set HSV values from user selected region
 			recordHSV_Values(image_ocv, HSV);
 
-			//filter HSV image between values and store filtered image to
-			//threshold matrix
-			inRange(HSV, cv::Scalar(H_MIN, S_MIN, V_MIN), cv::Scalar(H_MAX, S_MAX, V_MAX), threshold);
+			// Loop through the HSV ranges.
+			for (auto &i : hsv_filters) {
+				//filter HSV image between values and store filtered image to
+				//threshold matrix
+				inRange(HSV, cv::Scalar(i.hsv_range.at(0), i.hsv_range.at(2), i.hsv_range.at(4)),
+						cv::Scalar(i.hsv_range.at(1), i.hsv_range.at(3), i.hsv_range.at(5)), threshold);
 
-			//perform morphological operations on thresholded image to eliminate noise
-			//and emphasize the filtered object(s)
-			if (useMorphOps)
-				morphOps(threshold);
+				//perform morphological operations on thresholded image to eliminate noise
+				//and emphasize the filtered object(s)
+				if (useMorphOps)
+					morphOps(threshold);
 
-			//pass in thresholded frame to our object tracking function
-			//this function will return the x and y coordinates of the
-			//filtered object
-			if (trackObjects)
-				trackFilteredObject(x, y, threshold, image_ocv, mouseStruct.depth);
+				//pass in thresholded frame to our object tracking function
+				//this function will return the x and y coordinates of the
+				//filtered object
+				if (trackObjects)
+					trackFilteredObject(x, y, threshold, image_ocv, mouseStruct.depth);
 
-			// Resize and display with OpenCV
-			cv::resize(image_ocv, image_ocv_display, displaySize);
-			imshow("Image", image_ocv_display);
-			cv::resize(depth_image_ocv, depth_image_ocv_display, displaySize);
-			imshow("Depth", depth_image_ocv_display);
+				// Resize and display with OpenCV
+				cv::resize(image_ocv, image_ocv_display, displaySize);
+				imshow("Image", image_ocv_display);
+				cv::resize(depth_image_ocv, depth_image_ocv_display, displaySize);
+				imshow("Depth", depth_image_ocv_display);
 
-			key = cv::waitKey(10);
+				key = cv::waitKey(10);
+			}
 		}
 	}
 
@@ -307,15 +363,15 @@ void drawObject(int x, int y, cv::Mat &frame){
 	if (y - 25>0)
 		cv::line(frame, cv::Point(x, y), cv::Point(x, y - 25), cv::Scalar(0, 255, 0), 2);
 	else cv::line(frame, cv::Point(x, y), cv::Point(x, 0), cv::Scalar(0, 255, 0), 2);
-	if (y + 25<imageHeight)
+	if (y + 25<image_height)
 		cv::line(frame, cv::Point(x, y), cv::Point(x, y + 25), cv::Scalar(0, 255, 0), 2);
-	else cv::line(frame, cv::Point(x, y), cv::Point(x, imageHeight), cv::Scalar(0, 255, 0), 2);
+	else cv::line(frame, cv::Point(x, y), cv::Point(x, image_height), cv::Scalar(0, 255, 0), 2);
 	if (x - 25>0)
 		cv::line(frame, cv::Point(x, y), cv::Point(x - 25, y), cv::Scalar(0, 255, 0), 2);
 	else cv::line(frame, cv::Point(x, y), cv::Point(0, y), cv::Scalar(0, 255, 0), 2);
-	if (x + 25<imageWidth)
+	if (x + 25<image_width)
 		cv::line(frame, cv::Point(x, y), cv::Point(x + 25, y), cv::Scalar(0, 255, 0), 2);
-	else cv::line(frame, cv::Point(x, y), cv::Point(imageWidth, y), cv::Scalar(0, 255, 0), 2);
+	else cv::line(frame, cv::Point(x, y), cv::Point(image_width, y), cv::Scalar(0, 255, 0), 2);
 
 	cv::putText(frame, intToString(x) + "," + intToString(y), cv::Point(x, y + 30), 1, 1, cv::Scalar(0, 255, 0), 2);
 

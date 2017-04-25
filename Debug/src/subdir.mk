@@ -23,14 +23,14 @@ CPP_DEPS += \
 src/%.o: ../src/%.cpp
 	@echo 'Building file: $<'
 	@echo 'Invoking: GCC C++ Compiler'
-	g++ -std=c++0x -I/usr/local/zed/include -I/usr/local/cuda-8.0/include -O0 -g3 -Wall -c -fmessage-length=0 -MMD -MP -MF"$(@:%.o=%.d)" -MT"$(@:%.o=%.d)" -o "$@" "$<"
+	g++ -std=c++1y -I/usr/local/zed/include -I/usr/local/cuda-8.0/include -O0 -g3 -Wall -c -fmessage-length=0 -MMD -MP -MF"$(@:%.o=%.d)" -MT"$(@:%.o=%.d)" -o "$@" "$<"
 	@echo 'Finished building: $<'
 	@echo ' '
 
 src/High\ Goal\ Vision.o: ../src/High\ Goal\ Vision.cpp
 	@echo 'Building file: $<'
 	@echo 'Invoking: GCC C++ Compiler'
-	g++ -std=c++0x -I/usr/local/zed/include -I/usr/local/cuda-8.0/include -O0 -g3 -Wall -c -fmessage-length=0 -MMD -MP -MF"src/High Goal Vision.d" -MT"src/High\ Goal\ Vision.d" -o "$@" "$<"
+	g++ -std=c++1y -I/usr/local/zed/include -I/usr/local/cuda-8.0/include -O0 -g3 -Wall -c -fmessage-length=0 -MMD -MP -MF"src/High Goal Vision.d" -MT"src/High\ Goal\ Vision.d" -o "$@" "$<"
 	@echo 'Finished building: $<'
 	@echo ' '
 
