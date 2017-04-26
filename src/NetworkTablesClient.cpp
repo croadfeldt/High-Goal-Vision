@@ -30,3 +30,11 @@ void NetworkTablesClient::setTableName(std::string tn) {
 	this->table_name = tn;
 	NetworkTable::GetTable(this->getTableName());
 }
+
+double NetworkTablesClient::getData(llvm::StringRef data_name) {
+	return(table->GetNumber(data_name,-1));
+}
+
+void NetworkTablesClient::putRaw(llvm::StringRef data){
+	table->PutRaw("hg_image", data);
+}

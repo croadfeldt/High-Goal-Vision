@@ -9,6 +9,7 @@
 #include <iostream>
 #include "High Goal Vision.h"
 #include "NetworkTablesClient.h"
+#include <ctime>
 
 //initial min and max HSV filter values.
 int H_MIN = 0;
@@ -29,14 +30,7 @@ const int MAX_NUM_OBJECTS = 50;
 const int MIN_OBJECT_AREA = 5 * 5;
 const int MAX_OBJECT_AREA = imageWidth*imageHeight / 1.5;
 
-//names that will appear at the top of each window
-const std::string windowName = "Original Image";
-const std::string windowName1 = "HSV Image";
-const std::string windowName2 = "Thresholded Image";
-const std::string windowName3 = "After Morphological Operations";
-const std::string trackbarWindowName = "Trackbars";
-
-bool calibrationMode = true;//used for showing debugging windows, trackbars etc.
+bool calibrationMode = false; //used for showing debugging windows, trackbars etc.
 
 bool mouseIsDragging;//used for showing a rectangle on screen as user clicks and drags mouse
 bool mouseMove;
@@ -44,6 +38,9 @@ bool rectangleSelected;
 cv::Point initialClickPoint, currentMousePoint; //keep track of initial point clicked and current position of mouse
 cv::Rect rectangleROI; //this is the ROI that the user has selected
 std::vector<int> H_ROI, S_ROI, V_ROI;// HSV values from the click/drag ROI region stored in separate vectors so that we can sort them easily
+
+// How many frames per second for the output image to the smartdashboard.
+int sdFPS = 15;
 
 NetworkTablesClient ntc;
 
@@ -59,6 +56,21 @@ int main(int argc, char **argv) {
 	//program
 	bool trackObjects = true;
 	bool useMorphOps = true;
+
+	// JPEG Image prep items
+	std::vector<uchar> buff;//buffer for coding
+	std::vector<int> param(2);
+	param[0] = cv::IMWRITE_JPEG_QUALITY;
+	param[1] = 80;//default(95) 0-100
+
+	// Determine number of clock cycles between output frames.
+	std::clock_t clocks_per_frame = CLOCKS_PER_SEC / sdFPS;
+	std::clock_t last_clock = 0;
+
+	// Turn on calibration mode if any argument is given.
+	if (argc > 1) {
+		calibrationMode = true;
+	}
 
 	// Create a ZED camera object
 	sl::Camera zed;
@@ -129,6 +141,11 @@ int main(int argc, char **argv) {
 	char key = ' ';
 	while (key != 'q') {
 
+		// Get HSV values from smartdashboard if not in calibration mode.
+		if (!calibrationMode) {
+			getHSV();
+		}
+
 		// Grab and display image and depth
 		if (zed.grab(runtime_parameters) == sl::SUCCESS) {
 
@@ -157,13 +174,30 @@ int main(int argc, char **argv) {
 			if (trackObjects)
 				trackFilteredObject(x, y, threshold, image_ocv, mouseStruct.depth);
 
-			// Resize and display with OpenCV
-			cv::resize(image_ocv, image_ocv_display, displaySize);
-			imshow("Image", image_ocv_display);
-			cv::resize(depth_image_ocv, depth_image_ocv_display, displaySize);
-			imshow("Depth", depth_image_ocv_display);
+			// If not in calibration mode, don't display image windows.
+			if (calibrationMode) {
+				// Resize and display with OpenCV
+				cv::resize(image_ocv, image_ocv_display, displaySize);
+				imshow("Image", image_ocv_display);
+				cv::resize(depth_image_ocv, depth_image_ocv_display, displaySize);
+				imshow("Depth", depth_image_ocv_display);
 
-			key = cv::waitKey(10);
+				key = cv::waitKey(10);
+			}
+
+			// Prep and display the image for display on the smartdashboard.
+			if (clocks_per_frame > (std::clock() - last_clock)) {
+				buff.clear();
+				cv::imencode(".jpg", image_ocv, buff, param);
+				std::stringstream ss;
+				for(size_t i = 0; i < buff.size(); ++i)
+				{
+				  ss << buff[i];
+				}
+				std::string s = ss.str();
+				ntc.putRaw(s);
+				last_clock = std::clock();
+			}
 		}
 	}
 
@@ -392,17 +426,17 @@ void trackFilteredObject(int &x, int &y, cv::Mat threshold, cv::Mat &cameraFeed,
 
 				std::cout << std::endl;
 				if (isValidMeasure(dist)) {
-					std::cout << "Depth at (" << x << "," << y << ") : " << dist << "m";
+					//					std::cout << "Depth at (" << x << "," << y << ") : " << dist << "m";
 					ntc.putData(llvm::StringRef("High Goal Pos"), llvm::ArrayRef<double> {x,y,dist});
 				}
 				else {
 					std::string depth_status;
-					if (dist == TOO_FAR) depth_status = ("Depth is too far.");
-					else if (dist == TOO_CLOSE) depth_status = ("Depth is too close.");
-					else depth_status = ("Depth not available");
-					std::cout << depth_status;
+					//					if (dist == TOO_FAR) depth_status = ("Depth is too far.");
+					//					else if (dist == TOO_CLOSE) depth_status = ("Depth is too close.");
+					//					else depth_status = ("Depth not available");
+					//					std::cout << depth_status;
 				}
-				std::cout << std::endl;
+				//				std::cout << std::endl;
 
 				//draw largest contour
 				//drawContours(cameraFeed, contours, largestIndex, Scalar(0, 255, 255), 2);
@@ -433,5 +467,40 @@ static void onMouseCallback(int32_t event, int32_t x, int32_t y, int32_t flag, v
 			std::cout << depth_status;
 		}
 		std::cout << std::endl;
+	}
+}
+
+void getHSV() {
+	// Get the HSV values from the smartdashboard.
+	H_MIN = (int) ntc.getData("H_MIN");
+	H_MAX = (int) ntc.getData("H_MAX");
+	S_MIN = (int) ntc.getData("S_MIN");
+	S_MAX = (int) ntc.getData("S_MAX");
+	V_MIN = (int) ntc.getData("V_MIN");
+	V_MAX = (int) ntc.getData("V_MAX");
+
+	if (H_MIN == -1) {
+		H_MIN = 0;
+		std::cout << "Unable to retrieve H_MIN form smartdashboard." << std::endl;
+	}
+	if (H_MAX == -1) {
+		H_MAX = 255;
+		std::cout << "Unable to retrieve H_MAX form smartdashboard." << std::endl;
+	}
+	if (S_MIN == -1) {
+		S_MIN = 0;
+		std::cout << "Unable to retrieve S_MIN form smartdashboard." << std::endl;
+	}
+	if (S_MAX == -1) {
+		S_MAX = 255;
+		std::cout << "Unable to retrieve S_MAX form smartdashboard." << std::endl;
+	}
+	if (V_MIN == -1) {
+		V_MIN = 0;
+		std::cout << "Unable to retrieve V_MIN form smartdashboard." << std::endl;
+	}
+	if (V_MAX == -1) {
+		V_MAX = 255;
+		std::cout << "Unable to retrieve V_MAX form smartdashboard." << std::endl;
 	}
 }
