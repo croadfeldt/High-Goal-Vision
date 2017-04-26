@@ -8,12 +8,17 @@
 #ifndef CONFIG_H_
 #define CONFIG_H_
 
+#include <string>
+
 class Config {
 public:
 	Config();
+	Config(std::string config_file_path);
 	virtual ~Config();
+	int readConfig();
+	int readConfig(std::string config_file_path);
 private:
-	std::string config_file_name = "high_goal_config.yaml";
+	std::string config_file_path = "high_goal_config.yaml";
 };
 
 #endif /* CONFIG_H_ */

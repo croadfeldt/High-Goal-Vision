@@ -12,7 +12,6 @@
 #include <string>
 #include <opencv2/core.hpp>
 
-std::string config_file_name = "high_goal_config.yaml";
 static void onMouseCallback(int32_t event, int32_t x, int32_t y, int32_t flag, void * param);
 void clickAndDrag_Rectangle(int event, int x, int y, int flags, void* param);
 void recordHSV_Values(cv::Mat frame, cv::Mat hsv_frame);

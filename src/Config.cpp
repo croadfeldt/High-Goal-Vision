@@ -10,9 +10,20 @@
 #include <boost/filesystem.hpp>
 
 Config::Config() {
+}
+
+Config::Config(std::string config_file_path) : config_file_path(config_file_path) {
+	this->readConfig();
+}
+
+Config::~Config() {
+	// TODO Auto-generated destructor stub
+}
+
+int Config::readConfig() {
 	// Spin up a YAML object, if the config file exists.
-	if (boost::filesystem::exists(config_file_name)) {
-		YAML::Node config = YAML::LoadFile(config_file_name);
+	if (boost::filesystem::exists(config_file_path)) {
+		YAML::Node config = YAML::LoadFile(config_file_path);
 		std::cout << YAML::Dump(config) << std::endl;
 
 		// Parse the config file, for now just read in the HSV ranges.
@@ -29,11 +40,12 @@ Config::Config() {
 	else {
 		std::cout << "No config file found." << std::endl;
 	}
-
 }
 
-Config::~Config() {
-	// TODO Auto-generated destructor stub
+int Config::readConfig(std::string config_file_path) {
+	// Reuse existing readConfig function.
+	this->config_file_path = config_file_path;
+	return(this->readConfig());
 }
 
 
