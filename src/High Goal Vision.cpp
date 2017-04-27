@@ -2,7 +2,7 @@
 // https://www.youtube.com/user/khounslow
 
 #include <opencv2/opencv.hpp>
-#include <opencv2/highgui.hpp>
+#include <opencv2/highgui/highgui.hpp>
 #include <iostream>
 #include "High Goal Vision.h"
 #include "NetworkTablesClient.h"
@@ -38,13 +38,6 @@ std::vector<int> H_ROI, S_ROI, V_ROI;// HSV values from the click/drag ROI regio
 
 NetworkTablesClient ntc;
 
-typedef struct mouseOCVStruct {
-	sl::Mat depth;
-	cv::Size _resize;
-} mouseOCV;
-
-mouseOCV mouseStruct;
-
 int main(int argc, char **argv) {
 	//some boolean variables for different functionality within this
 	//program
@@ -54,10 +47,10 @@ int main(int argc, char **argv) {
 	std::cout << "Entering camera check" << std::endl;
 
 	// Create the VideoCapture object and open the requested camera.
-	cv::VideoCapture capture = new cv::VideoCapture;
+	cv::VideoCapture capture;
 
 	// Check if the camera is opened, if build the rest of the vectors.
-	if (capture->open(cam_id)) {
+	if (capture.open(cam_id)) {
 		std::cout << "Opened camera: " << cam_id << std::endl;
 	}
 	else {
@@ -78,8 +71,7 @@ int main(int argc, char **argv) {
 	int x = 0, y = 0;
 
 	// Mouse callback initialization
-	mouseStruct.depth.alloc(image_size, sl::MAT_TYPE_32F_C1);
-	mouseStruct._resize = displaySize;
+
 
 	// must create a window before setting mouse callback
 	cv::namedWindow("Image");
@@ -87,7 +79,7 @@ int main(int argc, char **argv) {
 	// set mouse callback function to be active on "Webcam Feed" window
 	// we pass the handle to our "frame" matrix so that we can draw a rectangle to it
 	// as the user clicks and drags the mouse
-	cv::setMouseCallback("Image", clickAndDrag_Rectangle, (void*) &mouseStruct);
+	cv::setMouseCallback("Image", clickAndDrag_Rectangle, &cameraFeed);
 
 	// initiate mouse move and drag to false
 	mouseIsDragging = false;
@@ -97,55 +89,43 @@ int main(int argc, char **argv) {
 	// Loop until 'q' is pressed
 	char key = ' ';
 	while (key != 'q') {
+		//store image to matrix
+		capture.read(cameraFeed);
 
-		// Grab and display image and depth
-		if (zed.grab(runtime_parameters) == sl::SUCCESS) {
+		//set HSV values from user selected region
+		recordHSV_Values(cameraFeed, HSV);
 
-			//store image to matrix
-			capture.read(cameraFeed);
+		//convert frame from BGR to HSV colorspace
+		cvtColor(cameraFeed, HSV, cv::COLOR_BGR2HSV);
 
-			//convert frame from BGR to HSV colorspace
-			cvtColor(cameraFeed, HSV, COLOR_BGR2HSV);
+		//set HSV values from user selected region
+		recordHSV_Values(cameraFeed, HSV);
 
-			//set HSV values from user selected region
-			recordHSV_Values(cameraFeed, HSV);
+		//filter HSV image between values and store filtered image to
+		//threshold matrix
+		inRange(HSV, cv::Scalar(H_MIN, S_MIN, V_MIN), cv::Scalar(H_MAX, S_MAX, V_MAX), threshold);
 
-			//convert frame from BGR to HSV colorspace
-			cvtColor(cameraFeed, HSV, cv::COLOR_BGR2HSV);
+		//perform morphological operations on thresholded image to eliminate noise
+		//and emphasize the filtered object(s)
+		if (useMorphOps)
+			morphOps(threshold);
 
-			//set HSV values from user selected region
-			recordHSV_Values(cameraFeed, HSV);
+		//pass in thresholded frame to our object tracking function
+		//this function will return the x and y coordinates of the
+		//filtered object
+		if (trackObjects)
+			trackFilteredObject(x, y, threshold, cameraFeed);
 
-			//filter HSV image between values and store filtered image to
-			//threshold matrix
-			inRange(HSV, cv::Scalar(H_MIN, S_MIN, V_MIN), cv::Scalar(H_MAX, S_MAX, V_MAX), threshold);
+		// Display images
+		imshow("Image", cameraFeed);
 
-			//perform morphological operations on thresholded image to eliminate noise
-			//and emphasize the filtered object(s)
-			if (useMorphOps)
-				morphOps(threshold);
-
-			//pass in thresholded frame to our object tracking function
-			//this function will return the x and y coordinates of the
-			//filtered object
-			if (trackObjects)
-				trackFilteredObject(x, y, threshold, cameraFeed, mouseStruct.depth);
-
-			// Display images
-			imshow("Image", cameraFeed);
-
-			key = cv::waitKey(10);
-		}
+		key = cv::waitKey(10);
 	}
 	return 0;
 }
 
 void clickAndDrag_Rectangle(int event, int x, int y, int flags, void* param){
 	//std::cout << "In clickAndDrag" << std::endl;
-
-	mouseOCVStruct* data = (mouseOCVStruct*) param;
-	int y_int = (y * data->depth.getHeight() / data->_resize.height);
-	int x_int = (x * data->depth.getWidth() / data->_resize.width);
 
 	//only if calibration mode is true will we use the mouse to change HSV values
 	if (calibrationMode == true){
@@ -155,7 +135,7 @@ void clickAndDrag_Rectangle(int event, int x, int y, int flags, void* param){
 		if (event == CV_EVENT_LBUTTONDOWN && mouseIsDragging == false)
 		{
 			//keep track of initial point clicked
-			initialClickPoint = cv::Point(x_int, y_int);
+			initialClickPoint = cv::Point(x, y);
 
 			//user has begun dragging the mouse
 			mouseIsDragging = true;
@@ -164,7 +144,7 @@ void clickAndDrag_Rectangle(int event, int x, int y, int flags, void* param){
 		if (event == CV_EVENT_MOUSEMOVE && mouseIsDragging == true)
 		{
 			//keep track of current mouse point
-			currentMousePoint = cv::Point(x_int, y_int);
+			currentMousePoint = cv::Point(x, y);
 			//user has moved the mouse while clicking and dragging
 			mouseMove = true;
 		}
@@ -308,7 +288,7 @@ void morphOps(cv::Mat &thresh){
 
 
 }
-void trackFilteredObject(int &x, int &y, cv::Mat threshold, cv::Mat &cameraFeed, sl::Mat &depth){
+void trackFilteredObject(int &x, int &y, cv::Mat threshold, cv::Mat &cameraFeed){
 
 	cv::Mat temp;
 	threshold.copyTo(temp);
@@ -363,7 +343,7 @@ void trackFilteredObject(int &x, int &y, cv::Mat threshold, cv::Mat &cameraFeed,
 
 				// Determine width and height of object.
 				// Calculates the bounding rect of the largest area contour
-				cv::Rect rect = boundingRect(contours[index]);
+				cv::Rect rect = cv::boundingRect(cv::Mat(contours[largestIndex]));
 				cv::Point pt1, pt2;
 				pt1.x = rect.x;
 				pt1.y = rect.y;
