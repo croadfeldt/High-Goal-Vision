@@ -312,6 +312,9 @@ void trackFilteredObject(int &x, int &y, cv::Mat threshold, cv::Mat &cameraFeed,
 
 	cv::Mat temp;
 	threshold.copyTo(temp);
+
+	int width, height = -1;
+
 	//these two vectors needed for output of findContours
 	std::vector<std::vector<cv::Point> > contours;
 	std::vector<cv::Vec4i> hierarchy;
@@ -357,6 +360,25 @@ void trackFilteredObject(int &x, int &y, cv::Mat threshold, cv::Mat &cameraFeed,
 				putText(cameraFeed, "Tracking Object", cv::Point(0, 50), 2, 1, cv::Scalar(0, 255, 0), 2);
 				//draw object location on screen
 				drawObject(x, y, cameraFeed);
+
+				// Determine width and height of object.
+				// Calculates the bounding rect of the largest area contour
+				cv::Rect rect = boundingRect(contours[index]);
+				cv::Point pt1, pt2;
+				pt1.x = rect.x;
+				pt1.y = rect.y;
+				pt2.x = rect.x + rect.width;
+				pt2.y = rect.y + rect.height;
+				width = rect.width;
+				height = rect.height;
+
+				if(calibrationMode) {
+					// Draws the rect in the original image and show it
+					rectangle(cameraFeed, pt1, pt2, CV_RGB(255,0,0), 1);
+				}
+
+				// Send data via network tables.
+				ntc.putData(llvm::StringRef("Gear Pos"), llvm::ArrayRef<double> {x,y,width,height});
 
 				//draw largest contour
 				//drawContours(cameraFeed, contours, largestIndex, Scalar(0, 255, 255), 2);
