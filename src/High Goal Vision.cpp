@@ -1,11 +1,8 @@
-// Based on ZED SDK 2.0 openCV example code.
-// Portions covered under StereoLabs copyright.
+// Based on code from Kyle Hounslow
+// https://www.youtube.com/user/khounslow
 
-#include <sl/Camera.hpp>
 #include <opencv2/opencv.hpp>
 #include <opencv2/highgui.hpp>
-#include <sl/Core.hpp>
-#include <sl/defines.hpp>
 #include <iostream>
 #include "High Goal Vision.h"
 #include "NetworkTablesClient.h"
@@ -18,9 +15,12 @@ int S_MAX = 0;
 int V_MIN = 0;
 int V_MAX = 0;
 
+// OpenCV camera id to open, typically 0 for single cam setups.
+int cam_id = 0;
+
 //Globals for image width and height of display windows.
-int imageWidth = 720;
-int imageHeight = 404;
+int imageWidth = 640;
+int imageHeight = 480;
 
 //max number of objects to be detected in frame
 const int MAX_NUM_OBJECTS = 50;
@@ -28,16 +28,7 @@ const int MAX_NUM_OBJECTS = 50;
 //minimum and maximum object area
 const int MIN_OBJECT_AREA = 5 * 5;
 const int MAX_OBJECT_AREA = imageWidth*imageHeight / 1.5;
-
-//names that will appear at the top of each window
-const std::string windowName = "Original Image";
-const std::string windowName1 = "HSV Image";
-const std::string windowName2 = "Thresholded Image";
-const std::string windowName3 = "After Morphological Operations";
-const std::string trackbarWindowName = "Trackbars";
-
 bool calibrationMode = true;//used for showing debugging windows, trackbars etc.
-
 bool mouseIsDragging;//used for showing a rectangle on screen as user clicks and drags mouse
 bool mouseMove;
 bool rectangleSelected;
@@ -60,8 +51,22 @@ int main(int argc, char **argv) {
 	bool trackObjects = true;
 	bool useMorphOps = true;
 
-	// Create a ZED camera object
-	sl::Camera zed;
+	std::cout << "Entering camera check" << std::endl;
+
+	// Create the VideoCapture object and open the requested camera.
+	cv::VideoCapture capture = new cv::VideoCapture;
+
+	// Check if the camera is opened, if build the rest of the vectors.
+	if (capture->open(cam_id)) {
+		std::cout << "Opened camera: " << cam_id << std::endl;
+	}
+	else {
+		std::cout << "Unable to open camera: " << cam_id << std::endl;
+		return 0;
+	}
+
+	//Matrix to store each frame of the webcam feed
+	cv::Mat cameraFeed;
 
 	//matrix storage for HSV image
 	cv::Mat HSV;
@@ -72,42 +77,9 @@ int main(int argc, char **argv) {
 	//x and y values for the location of the object
 	int x = 0, y = 0;
 
-	// Set configuration parameters
-	sl::InitParameters init_params;
-	init_params.camera_resolution = sl::RESOLUTION_HD720;
-	init_params.depth_mode = sl::DEPTH_MODE_PERFORMANCE;
-	init_params.coordinate_units = sl::UNIT_METER;
-
-	// Open the camera
-	sl::ERROR_CODE err = zed.open(init_params);
-	if (err != sl::SUCCESS)
-		return 1;
-
-	// Set runtime parameters after opening the camera
-	sl::RuntimeParameters runtime_parameters;
-	runtime_parameters.sensing_mode = sl::SENSING_MODE_STANDARD; // Use STANDARD sensing mode
-
-	// Create sl and cv Mat to get ZED left image and depth image
-	// Best way of sharing sl::Mat and cv::Mat :
-	// Create a sl::Mat and then construct a cv::Mat using the ptr to sl::Mat data.
-	sl::Resolution image_size = zed.getResolution();
-	sl::Mat image_zed(image_size, sl::MAT_TYPE_8U_C4); // Create a sl::Mat to handle Left image
-	cv::Mat image_ocv(image_zed.getHeight(), image_zed.getWidth(), CV_8UC4, image_zed.getPtr<sl::uchar1>(sl::MEM_CPU)); // Create an OpenCV Mat that shares sl::Mat buffer
-	sl::Mat depth_image_zed(image_size, sl::MAT_TYPE_8U_C4);
-	cv::Mat depth_image_ocv(depth_image_zed.getHeight(), depth_image_zed.getWidth(), CV_8UC4, depth_image_zed.getPtr<sl::uchar1>(sl::MEM_CPU));
-
-	// Create OpenCV images to display (lower resolution to fit the screen)
-	cv::Size displaySize(imageWidth, imageHeight);
-	cv::Mat image_ocv_display(displaySize, CV_8UC4);
-	cv::Mat depth_image_ocv_display(displaySize, CV_8UC4);
-
 	// Mouse callback initialization
 	mouseStruct.depth.alloc(image_size, sl::MAT_TYPE_32F_C1);
 	mouseStruct._resize = displaySize;
-
-	// Give a name to OpenCV Windows
-	cv::namedWindow("Depth", cv::WINDOW_AUTOSIZE);
-	//cv::setMouseCallback("Depth", onMouseCallback, (void*) &mouseStruct);
 
 	// must create a window before setting mouse callback
 	cv::namedWindow("Image");
@@ -122,9 +94,6 @@ int main(int argc, char **argv) {
 	mouseMove = false;
 	rectangleSelected = false;
 
-	// Jetson only. Execute the calling thread on 2nd core
-	sl::Camera::sticktoCPUCore(2);
-
 	// Loop until 'q' is pressed
 	char key = ' ';
 	while (key != 'q') {
@@ -132,15 +101,20 @@ int main(int argc, char **argv) {
 		// Grab and display image and depth
 		if (zed.grab(runtime_parameters) == sl::SUCCESS) {
 
-			zed.retrieveImage(image_zed, sl::VIEW_LEFT); // Retrieve the left image
-			zed.retrieveImage(depth_image_zed, sl::VIEW_DEPTH); //Retrieve the depth view (image)
-			zed.retrieveMeasure(mouseStruct.depth, sl::MEASURE_DEPTH); // Retrieve the depth measure (32bits)
+			//store image to matrix
+			capture.read(cameraFeed);
 
 			//convert frame from BGR to HSV colorspace
-			cvtColor(image_ocv, HSV, cv::COLOR_BGR2HSV);
+			cvtColor(cameraFeed, HSV, COLOR_BGR2HSV);
 
 			//set HSV values from user selected region
-			recordHSV_Values(image_ocv, HSV);
+			recordHSV_Values(cameraFeed, HSV);
+
+			//convert frame from BGR to HSV colorspace
+			cvtColor(cameraFeed, HSV, cv::COLOR_BGR2HSV);
+
+			//set HSV values from user selected region
+			recordHSV_Values(cameraFeed, HSV);
 
 			//filter HSV image between values and store filtered image to
 			//threshold matrix
@@ -155,19 +129,14 @@ int main(int argc, char **argv) {
 			//this function will return the x and y coordinates of the
 			//filtered object
 			if (trackObjects)
-				trackFilteredObject(x, y, threshold, image_ocv, mouseStruct.depth);
+				trackFilteredObject(x, y, threshold, cameraFeed, mouseStruct.depth);
 
-			// Resize and display with OpenCV
-			cv::resize(image_ocv, image_ocv_display, displaySize);
-			imshow("Image", image_ocv_display);
-			cv::resize(depth_image_ocv, depth_image_ocv_display, displaySize);
-			imshow("Depth", depth_image_ocv_display);
+			// Display images
+			imshow("Image", cameraFeed);
 
 			key = cv::waitKey(10);
 		}
 	}
-
-	zed.close();
 	return 0;
 }
 
@@ -346,8 +315,10 @@ void trackFilteredObject(int &x, int &y, cv::Mat threshold, cv::Mat &cameraFeed,
 	//these two vectors needed for output of findContours
 	std::vector<std::vector<cv::Point> > contours;
 	std::vector<cv::Vec4i> hierarchy;
+
 	//find contours of filtered image using openCV findContours function
 	findContours(temp, contours, hierarchy, CV_RETR_CCOMP, CV_CHAIN_APPROX_SIMPLE);
+
 	//use moments method to find our filtered object
 	double refArea = 0;
 	int largestIndex = 0;
@@ -387,51 +358,11 @@ void trackFilteredObject(int &x, int &y, cv::Mat threshold, cv::Mat &cameraFeed,
 				//draw object location on screen
 				drawObject(x, y, cameraFeed);
 
-				sl::float1 dist;
-				depth.getValue(x, y, &dist);
-
-				std::cout << std::endl;
-				if (isValidMeasure(dist)) {
-					std::cout << "Depth at (" << x << "," << y << ") : " << dist << "m";
-					ntc.putData(llvm::StringRef("High Goal Pos"), llvm::ArrayRef<double> {x,y,dist});
-				}
-				else {
-					std::string depth_status;
-					if (dist == TOO_FAR) depth_status = ("Depth is too far.");
-					else if (dist == TOO_CLOSE) depth_status = ("Depth is too close.");
-					else depth_status = ("Depth not available");
-					std::cout << depth_status;
-				}
-				std::cout << std::endl;
-
 				//draw largest contour
 				//drawContours(cameraFeed, contours, largestIndex, Scalar(0, 255, 255), 2);
 			}
 
 		}
 		else putText(cameraFeed, "TOO MUCH NOISE! ADJUST FILTER", cv::Point(0, 50), 1, 2, cv::Scalar(0, 0, 255), 2);
-	}
-}
-
-static void onMouseCallback(int32_t event, int32_t x, int32_t y, int32_t flag, void * param) {
-	if (event == CV_EVENT_LBUTTONDOWN) {
-		mouseOCVStruct* data = (mouseOCVStruct*) param;
-		int y_int = (y * data->depth.getHeight() / data->_resize.height);
-		int x_int = (x * data->depth.getWidth() / data->_resize.width);
-
-		sl::float1 dist;
-		data->depth.getValue(x_int, y_int, &dist);
-
-		std::cout << std::endl;
-		if (isValidMeasure(dist))
-			std::cout << "Depth at (" << x_int << "," << y_int << ") : " << dist << "m";
-		else {
-			std::string depth_status;
-			if (dist == TOO_FAR) depth_status = ("Depth is too far.");
-			else if (dist == TOO_CLOSE) depth_status = ("Depth is too close.");
-			else depth_status = ("Depth not available");
-			std::cout << depth_status;
-		}
-		std::cout << std::endl;
 	}
 }
