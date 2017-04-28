@@ -27,7 +27,7 @@ int imageHeight = 404;
 const int MAX_NUM_OBJECTS = 50;
 
 //minimum and maximum object area
-const int MIN_OBJECT_AREA = 5 * 5;
+const int MIN_OBJECT_AREA = 1 * 1;
 const int MAX_OBJECT_AREA = imageWidth*imageHeight / 1.5;
 
 bool calibrationMode = false; //used for showing debugging windows, trackbars etc.
@@ -146,6 +146,17 @@ int main(int argc, char **argv) {
 			getHSV();
 		}
 
+		// Pull Camera Settings from NetworkTables.
+		// This will be pushed into a separate thread in next version.
+		//        std::cout << "Reset all settings to default" << std::endl;
+		//        zed.setCameraSettings(sl::CAMERA_SETTINGS_BRIGHTNESS, -1, true);
+		//        zed.setCameraSettings(sl::CAMERA_SETTINGS_CONTRAST, -1, true);
+		//        zed.setCameraSettings(sl::CAMERA_SETTINGS_HUE, -1, true);
+		//        zed.setCameraSettings(sl::CAMERA_SETTINGS_SATURATION, -1, true);
+		//        zed.setCameraSettings(sl::CAMERA_SETTINGS_GAIN, -1, true);
+		zed.setCameraSettings(sl::CAMERA_SETTINGS_EXPOSURE, (int) ntc.getData("Exposure"), true);
+		//        zed.setCameraSettings(sl::CAMERA_SETTINGS_WHITEBALANCE, -1, true);
+
 		// Grab and display image and depth
 		if (zed.grab(runtime_parameters) == sl::SUCCESS) {
 
@@ -192,10 +203,10 @@ int main(int argc, char **argv) {
 				std::stringstream ss;
 				for(size_t i = 0; i < buff.size(); ++i)
 				{
-				  ss << buff[i];
+					ss << buff[i];
 				}
 				std::string s = ss.str();
-				ntc.putRaw(s);
+				ntc.putRaw("Image", s);
 				last_clock = std::clock();
 			}
 		}
@@ -290,25 +301,38 @@ void recordHSV_Values(cv::Mat frame, cv::Mat hsv_frame){
 		rectangleSelected = false;
 
 		//set min and max HSV values from min and max elements of each array
-
+		bool HSVUpdate = false;
 		if (H_ROI.size()>0){
 			//NOTE: min_element and max_element return iterators so we must dereference them with "*"
 			H_MIN = *std::min_element(H_ROI.begin(), H_ROI.end());
 			H_MAX = *std::max_element(H_ROI.begin(), H_ROI.end());
 			std::cout << "MIN 'H' VALUE: " << H_MIN << std::endl;
 			std::cout << "MAX 'H' VALUE: " << H_MAX << std::endl;
+
+			// Update smartdashboard values.
+			HSVUpdate = true;
 		}
 		if (S_ROI.size()>0){
 			S_MIN = *std::min_element(S_ROI.begin(), S_ROI.end());
 			S_MAX = *std::max_element(S_ROI.begin(), S_ROI.end());
 			std::cout << "MIN 'S' VALUE: " << S_MIN << std::endl;
 			std::cout << "MAX 'S' VALUE: " << S_MAX << std::endl;
+
+			// Update smartdashboard values.
+			HSVUpdate = true;
 		}
 		if (V_ROI.size()>0){
 			V_MIN = *std::min_element(V_ROI.begin(), V_ROI.end());
 			V_MAX = *std::max_element(V_ROI.begin(), V_ROI.end());
 			std::cout << "MIN 'V' VALUE: " << V_MIN << std::endl;
 			std::cout << "MAX 'V' VALUE: " << V_MAX << std::endl;
+
+			// Update smartdashboard values.
+			HSVUpdate = true;
+		}
+
+		if(HSVUpdate) {
+			ntc.putData("HSVVals", llvm::ArrayRef<double> {H_MIN, H_MAX, S_MIN, S_MAX, V_MIN, V_MAX});
 		}
 
 	}

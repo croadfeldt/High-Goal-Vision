@@ -21,7 +21,7 @@ public:
 	void setTableName(std::string);
 	llvm::StringRef getTableName() {return llvm::StringRef(table_name);}
 	double getData(llvm::StringRef data_name);
-	void putRaw(llvm::StringRef data);
+	void putRaw(llvm::StringRef, llvm::StringRef);
 
 private:
 	std::string table_name = "Vision";
