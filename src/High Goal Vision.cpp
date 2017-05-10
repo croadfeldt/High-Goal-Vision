@@ -159,7 +159,7 @@ int main(int argc, char **argv) {
 
 		// Get HSV values from smartdashboard.
 		getHSV();
-		getZedCamSettings(&zed);
+		updateZedCamSettings(&zed);
 
 		// Grab and display image and depth
 		if (zed.grab(runtime_parameters) == sl::SUCCESS) {
