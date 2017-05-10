@@ -547,7 +547,7 @@ std::string encode_for_sd(cv::Mat input_image) {
 	return(ss.str());
 }
 
-void getZedCamSettings(sl::Camera *zed) {
+void updateZedCamSettings(sl::Camera *zed) {
 	// Get the HSV values from the smartdashboard, if needed.
 	if (ntc.GetBoolean("CamSettingsFromSD")) {
 		int temp_brightness = (int) ntc.getData("Brightness");
