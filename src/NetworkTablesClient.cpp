@@ -31,6 +31,14 @@ void NetworkTablesClient::setTableName(std::string tn) {
 	NetworkTable::GetTable(this->getTableName());
 }
 
+bool NetworkTablesClient::GetBoolean(llvm::StringRef name) {
+	return(table->GetBoolean(name, false));
+}
+
+void NetworkTablesClient::PutBoolean(llvm::StringRef name, bool value) {
+	table->PutBoolean(name, value);
+}
+
 double NetworkTablesClient::getData(llvm::StringRef data_name) {
 	return(table->GetNumber(data_name,-1));
 }

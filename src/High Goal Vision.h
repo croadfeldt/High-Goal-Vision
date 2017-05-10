@@ -21,5 +21,7 @@ void morphOps(cv::Mat &thresh);
 void trackFilteredObject(int &x, int &y, cv::Mat threshold, cv::Mat &cameraFeed, sl::Mat &depth);
 static void onMouseCallback(int32_t event, int32_t x, int32_t y, int32_t flag, void * param);
 void getHSV();
+std::string encode_for_sd(cv::Mat);
+void getZedCamSettings(sl::Camera *);
 
 #endif /* HIGH_GOAL_VISION_H_ */

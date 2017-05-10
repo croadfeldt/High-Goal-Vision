@@ -19,6 +19,15 @@ int S_MAX = 0;
 int V_MIN = 0;
 int V_MAX = 0;
 
+// Initial Camera Settings
+int BRIGHTNESS = -1;
+int CONTRAST = -1;
+int HUE = -1;
+int SATURATION = -1;
+int GAIN = -1;
+int EXPOSURE = -1;
+int WHITEBALANCE = -1;
+
 //Globals for image width and height of display windows.
 int imageWidth = 720;
 int imageHeight = 404;
@@ -31,7 +40,7 @@ const int MIN_OBJECT_AREA = 1 * 1;
 const int MAX_OBJECT_AREA = imageWidth*imageHeight / 1.5;
 
 bool calibrationMode = false; //used for showing debugging windows, trackbars etc.
-
+bool HSVFromSD = false; // Used to coordinate HSV value push from the SmartDashboard after core startup.
 bool mouseIsDragging;//used for showing a rectangle on screen as user clicks and drags mouse
 bool mouseMove;
 bool rectangleSelected;
@@ -57,18 +66,13 @@ int main(int argc, char **argv) {
 	bool trackObjects = true;
 	bool useMorphOps = true;
 
-	// JPEG Image prep items
-	std::vector<uchar> buff;//buffer for coding
-	std::vector<int> param(2);
-	param[0] = cv::IMWRITE_JPEG_QUALITY;
-	param[1] = 80;//default(95) 0-100
-
 	// Determine number of clock cycles between output frames.
 	std::clock_t clocks_per_frame = CLOCKS_PER_SEC / sdFPS;
 	std::clock_t last_clock = 0;
 
 	// Turn on calibration mode if any argument is given.
 	if (argc > 1) {
+		std::cout << "Calibration Mode On" << std::endl;
 		calibrationMode = true;
 	}
 
@@ -95,6 +99,15 @@ int main(int argc, char **argv) {
 	if (err != sl::SUCCESS)
 		return 1;
 
+	std::cout << "Reset all Zed Camera settings to default" << std::endl;
+	zed.setCameraSettings(sl::CAMERA_SETTINGS_BRIGHTNESS, BRIGHTNESS, true);
+	zed.setCameraSettings(sl::CAMERA_SETTINGS_CONTRAST, CONTRAST, true);
+	zed.setCameraSettings(sl::CAMERA_SETTINGS_HUE, HUE, true);
+	zed.setCameraSettings(sl::CAMERA_SETTINGS_SATURATION, SATURATION, true);
+	zed.setCameraSettings(sl::CAMERA_SETTINGS_GAIN, GAIN, true);
+	zed.setCameraSettings(sl::CAMERA_SETTINGS_EXPOSURE, EXPOSURE, true);
+	zed.setCameraSettings(sl::CAMERA_SETTINGS_WHITEBALANCE, WHITEBALANCE, true);
+
 	// Set runtime parameters after opening the camera
 	sl::RuntimeParameters runtime_parameters;
 	runtime_parameters.sensing_mode = sl::SENSING_MODE_STANDARD; // Use STANDARD sensing mode
@@ -112,27 +125,30 @@ int main(int argc, char **argv) {
 	cv::Size displaySize(imageWidth, imageHeight);
 	cv::Mat image_ocv_display(displaySize, CV_8UC4);
 	cv::Mat depth_image_ocv_display(displaySize, CV_8UC4);
+	cv::Mat threshold_display(displaySize, CV_8UC4);
 
 	// Mouse callback initialization
 	mouseStruct.depth.alloc(image_size, sl::MAT_TYPE_32F_C1);
 	mouseStruct._resize = displaySize;
 
-	// Give a name to OpenCV Windows
-	cv::namedWindow("Depth", cv::WINDOW_AUTOSIZE);
-	//cv::setMouseCallback("Depth", onMouseCallback, (void*) &mouseStruct);
+	if (calibrationMode) {
+		// Give a name to OpenCV Windows
+		cv::namedWindow("Depth", cv::WINDOW_AUTOSIZE);
+		//cv::setMouseCallback("Depth", onMouseCallback, (void*) &mouseStruct);
 
-	// must create a window before setting mouse callback
-	cv::namedWindow("Image");
+		// must create a window before setting mouse callback
+		cv::namedWindow("Image");
 
-	// set mouse callback function to be active on "Webcam Feed" window
-	// we pass the handle to our "frame" matrix so that we can draw a rectangle to it
-	// as the user clicks and drags the mouse
-	cv::setMouseCallback("Image", clickAndDrag_Rectangle, (void*) &mouseStruct);
+		// set mouse callback function to be active on "Webcam Feed" window
+		// we pass the handle to our "frame" matrix so that we can draw a rectangle to it
+		// as the user clicks and drags the mouse
+		cv::setMouseCallback("Image", clickAndDrag_Rectangle, (void*) &mouseStruct);
 
-	// initiate mouse move and drag to false
-	mouseIsDragging = false;
-	mouseMove = false;
-	rectangleSelected = false;
+		// initiate mouse move and drag to false
+		mouseIsDragging = false;
+		mouseMove = false;
+		rectangleSelected = false;
+	}
 
 	// Jetson only. Execute the calling thread on 2nd core
 	sl::Camera::sticktoCPUCore(2);
@@ -141,21 +157,9 @@ int main(int argc, char **argv) {
 	char key = ' ';
 	while (key != 'q') {
 
-		// Get HSV values from smartdashboard if not in calibration mode.
-		if (!calibrationMode) {
-			getHSV();
-		}
-
-		// Pull Camera Settings from NetworkTables.
-		// This will be pushed into a separate thread in next version.
-		//        std::cout << "Reset all settings to default" << std::endl;
-		//        zed.setCameraSettings(sl::CAMERA_SETTINGS_BRIGHTNESS, -1, true);
-		//        zed.setCameraSettings(sl::CAMERA_SETTINGS_CONTRAST, -1, true);
-		//        zed.setCameraSettings(sl::CAMERA_SETTINGS_HUE, -1, true);
-		//        zed.setCameraSettings(sl::CAMERA_SETTINGS_SATURATION, -1, true);
-		//        zed.setCameraSettings(sl::CAMERA_SETTINGS_GAIN, -1, true);
-		zed.setCameraSettings(sl::CAMERA_SETTINGS_EXPOSURE, (int) ntc.getData("Exposure"), true);
-		//        zed.setCameraSettings(sl::CAMERA_SETTINGS_WHITEBALANCE, -1, true);
+		// Get HSV values from smartdashboard.
+		getHSV();
+		getZedCamSettings(&zed);
 
 		// Grab and display image and depth
 		if (zed.grab(runtime_parameters) == sl::SUCCESS) {
@@ -188,25 +192,21 @@ int main(int argc, char **argv) {
 			// If not in calibration mode, don't display image windows.
 			if (calibrationMode) {
 				// Resize and display with OpenCV
+				// Resize and display with OpenCV
 				cv::resize(image_ocv, image_ocv_display, displaySize);
-				imshow("Image", image_ocv_display);
 				cv::resize(depth_image_ocv, depth_image_ocv_display, displaySize);
+				cv::resize(threshold, threshold_display, displaySize);
+				imshow("Image", image_ocv_display);
 				imshow("Depth", depth_image_ocv_display);
+				imshow("Threshold", threshold_display);
 
 				key = cv::waitKey(10);
 			}
 
 			// Prep and display the image for display on the smartdashboard.
-			if (clocks_per_frame > (std::clock() - last_clock)) {
-				buff.clear();
-				cv::imencode(".jpg", image_ocv, buff, param);
-				std::stringstream ss;
-				for(size_t i = 0; i < buff.size(); ++i)
-				{
-					ss << buff[i];
-				}
-				std::string s = ss.str();
-				ntc.putRaw("Image", s);
+			if (clocks_per_frame < (std::clock() - last_clock)) {
+				ntc.putRaw("hg_image", encode_for_sd(image_ocv));
+				ntc.putRaw("hg_thresh", encode_for_sd(threshold));
 				last_clock = std::clock();
 			}
 		}
@@ -217,17 +217,12 @@ int main(int argc, char **argv) {
 }
 
 void clickAndDrag_Rectangle(int event, int x, int y, int flags, void* param){
-	//std::cout << "In clickAndDrag" << std::endl;
-
 	mouseOCVStruct* data = (mouseOCVStruct*) param;
 	int y_int = (y * data->depth.getHeight() / data->_resize.height);
 	int x_int = (x * data->depth.getWidth() / data->_resize.width);
 
 	//only if calibration mode is true will we use the mouse to change HSV values
 	if (calibrationMode == true){
-		//get handle to video feed passed in as "param" and cast as Mat pointer
-		cv::Mat* videoFeed = (cv::Mat*)param;
-
 		if (event == CV_EVENT_LBUTTONDOWN && mouseIsDragging == false)
 		{
 			//keep track of initial point clicked
@@ -331,8 +326,10 @@ void recordHSV_Values(cv::Mat frame, cv::Mat hsv_frame){
 			HSVUpdate = true;
 		}
 
-		if(HSVUpdate) {
+		if(HSVUpdate && HSVFromSD) {
+			std::cout << "Pushing HSV values to Robot Code / SmartDashboard." << std::endl;
 			ntc.putData("HSVVals", llvm::ArrayRef<double> {H_MIN, H_MAX, S_MIN, S_MAX, V_MIN, V_MAX});
+			ntc.PutBoolean("HSVFromCore", true);
 		}
 
 	}
@@ -345,13 +342,6 @@ void recordHSV_Values(cv::Mat frame, cv::Mat hsv_frame){
 
 }
 
-std::string intToString(int number){
-
-
-	std::stringstream ss;
-	ss << number;
-	return ss.str();
-}
 void drawObject(int x, int y, cv::Mat &frame){
 
 	//use some of the openCV drawing functions to draw crosshairs
@@ -375,7 +365,7 @@ void drawObject(int x, int y, cv::Mat &frame){
 		cv::line(frame, cv::Point(x, y), cv::Point(x + 25, y), cv::Scalar(0, 255, 0), 2);
 	else cv::line(frame, cv::Point(x, y), cv::Point(imageWidth, y), cv::Scalar(0, 255, 0), 2);
 
-	cv::putText(frame, intToString(x) + "," + intToString(y), cv::Point(x, y + 30), 1, 1, cv::Scalar(0, 255, 0), 2);
+	cv::putText(frame, std::to_string(x) + "," + std::to_string(y), cv::Point(x, y + 30), 1, 1, cv::Scalar(0, 255, 0), 2);
 
 }
 void morphOps(cv::Mat &thresh){
@@ -397,8 +387,7 @@ void morphOps(cv::Mat &thresh){
 
 
 }
-void trackFilteredObject(int &x, int &y, cv::Mat threshold, cv::Mat &cameraFeed, sl::Mat &depth){
-
+void trackFilteredObject(int &x, int &y, cv::Mat threshold, cv::Mat &cameraFeed, sl::Mat &depth) {
 	cv::Mat temp;
 	threshold.copyTo(temp);
 	//these two vectors needed for output of findContours
@@ -432,7 +421,7 @@ void trackFilteredObject(int &x, int &y, cv::Mat threshold, cv::Mat &cameraFeed,
 					largestIndex = index;
 				}
 				else {
-					std::cout << "Found item, but did not match size range." <<std::endl;
+					//std::cout << "Found item, but did not match size range." <<std::endl;
 					objectFound = false;
 				}
 				//these will be changed using trackbars
@@ -448,19 +437,9 @@ void trackFilteredObject(int &x, int &y, cv::Mat threshold, cv::Mat &cameraFeed,
 				sl::float1 dist;
 				depth.getValue(x, y, &dist);
 
-				std::cout << std::endl;
 				if (isValidMeasure(dist)) {
-					//					std::cout << "Depth at (" << x << "," << y << ") : " << dist << "m";
 					ntc.putData(llvm::StringRef("High Goal Pos"), llvm::ArrayRef<double> {x,y,dist});
 				}
-				else {
-					std::string depth_status;
-					//					if (dist == TOO_FAR) depth_status = ("Depth is too far.");
-					//					else if (dist == TOO_CLOSE) depth_status = ("Depth is too close.");
-					//					else depth_status = ("Depth not available");
-					//					std::cout << depth_status;
-				}
-				//				std::cout << std::endl;
 
 				//draw largest contour
 				//drawContours(cameraFeed, contours, largestIndex, Scalar(0, 255, 255), 2);
@@ -471,6 +450,7 @@ void trackFilteredObject(int &x, int &y, cv::Mat threshold, cv::Mat &cameraFeed,
 	}
 }
 
+// The following callback function is not used, leaving it as reference code.
 static void onMouseCallback(int32_t event, int32_t x, int32_t y, int32_t flag, void * param) {
 	if (event == CV_EVENT_LBUTTONDOWN) {
 		mouseOCVStruct* data = (mouseOCVStruct*) param;
@@ -495,36 +475,177 @@ static void onMouseCallback(int32_t event, int32_t x, int32_t y, int32_t flag, v
 }
 
 void getHSV() {
-	// Get the HSV values from the smartdashboard.
-	H_MIN = (int) ntc.getData("H_MIN");
-	H_MAX = (int) ntc.getData("H_MAX");
-	S_MIN = (int) ntc.getData("S_MIN");
-	S_MAX = (int) ntc.getData("S_MAX");
-	V_MIN = (int) ntc.getData("V_MIN");
-	V_MAX = (int) ntc.getData("V_MAX");
+	// Get the HSV values from the smartdashboard, if needed.
+	if (ntc.GetBoolean("HSVFromSD")) {
+		int h_min_temp = (int) ntc.getData("H_MIN");
+		int h_max_temp = (int) ntc.getData("H_MAX");
+		int s_min_temp = (int) ntc.getData("S_MIN");
+		int s_max_temp = (int) ntc.getData("S_MAX");
+		int v_min_temp = (int) ntc.getData("V_MIN");
+		int v_max_temp = (int) ntc.getData("V_MAX");
 
-	if (H_MIN == -1) {
-		H_MIN = 0;
-		std::cout << "Unable to retrieve H_MIN form smartdashboard." << std::endl;
+		if (H_MIN != h_min_temp && h_min_temp != -1) {
+			H_MIN = h_min_temp;
+			std::cout << "Received H_MIN from Robot Code / SmartDashboard: " << H_MIN << std::endl;
+		}
+		if (H_MAX != h_max_temp && h_max_temp != -1) {
+			H_MAX = h_max_temp;
+			std::cout << "Received H_MAX from Robot Code / SmartDashboard: " << H_MAX << std::endl;
+		}
+		if (S_MIN != s_min_temp && s_min_temp != -1) {
+			S_MIN = s_min_temp;
+			std::cout << "Received S_MIN from Robot Code / SmartDashboard: " << S_MIN << std::endl;
+		}
+		if (S_MAX != s_max_temp && s_max_temp != -1) {
+			S_MAX = s_max_temp;
+			std::cout << "Received S_MAX from Robot Code / SmartDashboard: " << S_MAX << std::endl;
+		}
+		if (V_MIN != v_min_temp && v_min_temp != -1) {
+			V_MIN = v_min_temp;
+			std::cout << "Received V_MIN from Robot Code / SmartDashboard: " << V_MIN << std::endl;
+		}
+		if (V_MAX != v_max_temp && v_max_temp != -1) {
+			V_MAX = v_max_temp;
+			std::cout << "Received V_MAX from Robot Code / SmartDashboard: " << V_MAX << std::endl;
+		}
+
+		// Reset HSVFromSD.
+		ntc.PutBoolean("HSVFromSD", false);
+
+		// Set internal flag that allows HSV values from the core to be pushed back up to the SmartDashboard.
+		if (! HSVFromSD) {
+			std::cout << "Received initial HSV values from the Robot Code / SmartDashboard." << std::endl;
+			HSVFromSD = true;
+		}
 	}
-	if (H_MAX == -1) {
-		H_MAX = 255;
-		std::cout << "Unable to retrieve H_MAX form smartdashboard." << std::endl;
+}
+
+std::string encode_for_sd(cv::Mat input_image) {
+	// JPEG Image prep items
+	std::vector<uchar> buff;//buffer for coding
+	std::vector<int> param(2);
+	param[0] = cv::IMWRITE_JPEG_QUALITY;
+	param[1] = 80;//default(95) 0-100
+
+	// Output image size
+	int sd_image_width = 320;
+	int sd_image_height = 180;
+	cv::Size sd_display_size(sd_image_width, sd_image_height);
+
+	cv::Mat output_image;
+
+	buff.clear();
+	cv::resize(input_image, output_image, sd_display_size);
+	cv::imencode(".jpg", output_image, buff, param);
+	std::stringstream ss;
+	for(size_t i = 0; i < buff.size(); ++i)
+	{
+		ss << buff[i];
 	}
-	if (S_MIN == -1) {
-		S_MIN = 0;
-		std::cout << "Unable to retrieve S_MIN form smartdashboard." << std::endl;
-	}
-	if (S_MAX == -1) {
-		S_MAX = 255;
-		std::cout << "Unable to retrieve S_MAX form smartdashboard." << std::endl;
-	}
-	if (V_MIN == -1) {
-		V_MIN = 0;
-		std::cout << "Unable to retrieve V_MIN form smartdashboard." << std::endl;
-	}
-	if (V_MAX == -1) {
-		V_MAX = 255;
-		std::cout << "Unable to retrieve V_MAX form smartdashboard." << std::endl;
+	ss.seekg(0, std::ios::beg);
+
+	return(ss.str());
+}
+
+void getZedCamSettings(sl::Camera *zed) {
+	// Get the HSV values from the smartdashboard, if needed.
+	if (ntc.GetBoolean("CamSettingsFromSD")) {
+		int temp_brightness = (int) ntc.getData("Brightness");
+		int temp_contrast = (int) ntc.getData("Contrast");
+		int temp_hue = (int) ntc.getData("Hue");
+		int temp_saturation = (int) ntc.getData("Saturation");
+		int temp_gain = (int) ntc.getData("Gain");
+		int temp_exposure = (int) ntc.getData("Exposure");
+		int temp_whitebalance = (int) ntc.getData("WhiteBalance");
+
+		// Pull Camera Settings from NetworkTables.
+		if (temp_brightness != BRIGHTNESS) {
+			// Set camera to use auto if needed.
+			if (temp_brightness == -1) {
+				zed->setCameraSettings(sl::CAMERA_SETTINGS_BRIGHTNESS, temp_brightness, true);
+			}
+			else {
+				zed->setCameraSettings(sl::CAMERA_SETTINGS_BRIGHTNESS, temp_brightness, false);
+			}
+			BRIGHTNESS = temp_brightness;
+			std::cout << "Received Brightness setting from Robot Code / SmartDashboard: " << std::to_string(temp_brightness) << std::endl;
+		}
+
+		if (temp_contrast != CONTRAST) {
+			// Set camera to use auto if needed.
+			if (temp_contrast == -1) {
+				zed->setCameraSettings(sl::CAMERA_SETTINGS_CONTRAST, temp_contrast, true);
+			}
+			else {
+				zed->setCameraSettings(sl::CAMERA_SETTINGS_CONTRAST, temp_contrast, false);
+			}
+			CONTRAST = temp_contrast;
+			std::cout << "Received Contrast setting from Robot Code / SmartDashboard: " << std::to_string(temp_contrast) << std::endl;
+		}
+
+		if (temp_hue != HUE) {
+			// Set camera to use auto if needed.
+			if (temp_hue == -1) {
+				zed->setCameraSettings(sl::CAMERA_SETTINGS_HUE, temp_hue, true);
+			}
+			else {
+				zed->setCameraSettings(sl::CAMERA_SETTINGS_HUE, temp_hue, false);
+			}
+			HUE = temp_hue;
+			std::cout << "Received Hue setting from Robot Code / SmartDashboard: " << std::to_string(temp_hue) << std::endl;
+		}
+
+		if (temp_saturation != SATURATION) {
+			// Set camera to use auto if needed.
+			if (temp_saturation == -1) {
+				zed->setCameraSettings(sl::CAMERA_SETTINGS_SATURATION, temp_saturation, true);
+			}
+			else {
+				zed->setCameraSettings(sl::CAMERA_SETTINGS_SATURATION, temp_saturation, false);
+			}
+			SATURATION = temp_saturation;
+			std::cout << "Received Saturation setting from Robot Code / SmartDashboard: " << std::to_string(temp_saturation) << std::endl;
+		}
+
+		if (temp_gain != GAIN) {
+			// Set camera to use auto if needed.
+			if (temp_gain == -1) {
+				zed->setCameraSettings(sl::CAMERA_SETTINGS_GAIN, temp_gain, true);
+			}
+			else {
+				zed->setCameraSettings(sl::CAMERA_SETTINGS_GAIN, temp_gain, false);
+			}
+			GAIN = temp_gain;
+			std::cout << "Received Gain setting from Robot Code / SmartDashboard: " << std::to_string(temp_gain) << std::endl;
+		}
+
+		if (temp_exposure != EXPOSURE) {
+			// Set camera to use auto if needed.
+			if (temp_exposure == -1) {
+				zed->setCameraSettings(sl::CAMERA_SETTINGS_EXPOSURE, temp_exposure, true);
+			}
+			else {
+				zed->setCameraSettings(sl::CAMERA_SETTINGS_EXPOSURE, temp_exposure, false);
+			}
+			EXPOSURE = temp_exposure;
+			std::cout << "Received Exposure setting from Robot Code / SmartDashboard: " << std::to_string(temp_exposure) << std::endl;
+		}
+
+		if (temp_whitebalance != WHITEBALANCE) {
+			// Check to see if CAMERA_SETTINGS_AUTO_WHITEBALANCE needs to be set true or not.
+			if (temp_whitebalance != -1) {
+				zed->setCameraSettings(sl::CAMERA_SETTINGS_AUTO_WHITEBALANCE, 0, false);
+				zed->setCameraSettings(sl::CAMERA_SETTINGS_WHITEBALANCE, temp_whitebalance, false);
+			}
+			else {
+				zed->setCameraSettings(sl::CAMERA_SETTINGS_AUTO_WHITEBALANCE, 1, true);
+				zed->setCameraSettings(sl::CAMERA_SETTINGS_WHITEBALANCE, temp_whitebalance, true);
+			}
+			WHITEBALANCE = temp_whitebalance;
+			std::cout << "Received White Balance setting from Robot Code / SmartDashboard: " << std::to_string(temp_whitebalance) << std::endl;
+		}
+
+		// Reset flag so Robot Code knows data was received.
+		ntc.PutBoolean("CamSettingsFromSD", false);
 	}
 }
